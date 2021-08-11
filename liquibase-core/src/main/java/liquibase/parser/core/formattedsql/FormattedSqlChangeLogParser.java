@@ -9,6 +9,8 @@ import liquibase.changelog.ChangeSet;
 import liquibase.changelog.DatabaseChangeLog;
 import liquibase.exception.ChangeLogParseException;
 import liquibase.parser.ChangeLogParser;
+import liquibase.precondition.Precondition;
+import liquibase.precondition.PreconditionFactory;
 import liquibase.precondition.core.PreconditionContainer;
 import liquibase.precondition.core.SqlPrecondition;
 import liquibase.resource.ResourceAccessor;
@@ -80,11 +82,13 @@ public class FormattedSqlChangeLogParser implements ChangeLogParser {
 
             ChangeSet changeSet = null;
             RawSQLChange change = null;
+
             Pattern changeLogPattern = Pattern.compile("\\-\\-\\s*liquibase formatted.*", Pattern.CASE_INSENSITIVE);
             Pattern changeSetPattern = Pattern.compile("\\s*\\-\\-[\\s]*changeset\\s+([^:]+):(\\S+).*", Pattern.CASE_INSENSITIVE);
             Pattern rollbackPattern = Pattern.compile("\\s*\\-\\-[\\s]*rollback (.*)", Pattern.CASE_INSENSITIVE);
             Pattern preconditionsPattern = Pattern.compile("\\s*\\-\\-[\\s]*preconditions(.*)", Pattern.CASE_INSENSITIVE);
-            Pattern preconditionPattern = Pattern.compile("\\s*\\-\\-[\\s]*precondition\\-([a-zA-Z0-9-]+) (.*)", Pattern.CASE_INSENSITIVE);
+            Pattern sqlPreconditionPattern = Pattern.compile("\\s*\\-\\-[\\s]*precondition\\-([a-zA-Z0-9-]+) (.*)", Pattern.CASE_INSENSITIVE);
+            Pattern preconditionPattern = Pattern.compile("\\s*\\-\\-[\\s]*precondition\\-([a-zA-Z0-9-]+)", Pattern.CASE_INSENSITIVE);
             Pattern stripCommentsPattern = Pattern.compile(".*stripComments:(\\w+).*", Pattern.CASE_INSENSITIVE);
             Pattern splitStatementsPattern = Pattern.compile(".*splitStatements:(\\w+).*", Pattern.CASE_INSENSITIVE);
             Pattern rollbackSplitStatementsPattern = Pattern.compile(".*rollbackSplitStatements:(\\w+).*", Pattern.CASE_INSENSITIVE);
@@ -219,6 +223,9 @@ public class FormattedSqlChangeLogParser implements ChangeLogParser {
                        new ChangeSet(changeSetPatternMatcher.group(2), changeSetPatternMatcher.group(1), runAlways, runOnChange, logicalFilePath, context, dbms, runWith, runInTransaction, changeLog.getObjectQuotingStrategy(), changeLog);
                     changeSet.setLabels(new Labels(labels));
                     changeSet.setFailOnError(failOnError);
+
+                    addValidateSqlCondition(changeSet);
+
                     changeLog.addChangeSet(changeSet);
 
                     change = new RawSQLChange();
@@ -237,6 +244,7 @@ public class FormattedSqlChangeLogParser implements ChangeLogParser {
                         Matcher commentMatcher = commentPattern.matcher(line);
                         Matcher rollbackMatcher = rollbackPattern.matcher(line);
                         Matcher preconditionsMatcher = preconditionsPattern.matcher(line);
+                        Matcher sqlPreconditionMatcher = sqlPreconditionPattern.matcher(line);
                         Matcher preconditionMatcher = preconditionPattern.matcher(line);
                         Matcher validCheckSumMatcher = validCheckSumPattern.matcher(line);
 
@@ -265,23 +273,32 @@ public class FormattedSqlChangeLogParser implements ChangeLogParser {
                                 pc.setOnSqlOutput(StringUtil.trimToNull(parseString(onUpdateSqlMatcher)));
                                 changeSet.setPreconditions(pc);
                             }
-                        } else if (preconditionMatcher.matches()) {
-                            if (changeSet.getPreconditions() == null) {
-                                // create the defaults
-                                changeSet.setPreconditions(new PreconditionContainer());
-                            }
-                            if (preconditionMatcher.groupCount() == 2) {
-                                String name = StringUtil.trimToNull(preconditionMatcher.group(1));
+                        } else if (sqlPreconditionMatcher.matches()) {
+                            if (sqlPreconditionMatcher.groupCount() == 2) {
+                                String name = StringUtil.trimToNull(sqlPreconditionMatcher.group(1));
                                 if (name != null) {
-                                    String body = preconditionMatcher.group(2).trim();
+                                    String body = sqlPreconditionMatcher.group(2).trim();
                                     if ("sql-check".equals(name)) {
-                                        changeSet.getPreconditions().addNestedPrecondition(parseSqlCheckCondition(changeLogParameters.expandExpressions(StringUtil.trimToNull(body), changeSet.getChangeLog())));
+                                        getOrCreatePreconditions(changeSet).addNestedPrecondition(parseSqlCheckCondition(changeLogParameters.expandExpressions(StringUtil.trimToNull(body), changeSet.getChangeLog())));
                                     } else {
                                         throw new ChangeLogParseException("The '" + name + "' precondition type is not supported.");
                                     }
                                 }
                             }
-                        } else {
+                        } else if (preconditionMatcher.matches()) {
+                            if (preconditionMatcher.groupCount() == 1) {
+                                String name = StringUtil.trimToNull(preconditionMatcher.group(1));
+                                if (name != null) {
+                                    Precondition precondition = PreconditionFactory.getInstance().create(name);
+                                    if (precondition != null) {
+                                        getOrCreatePreconditions(changeSet).addNestedPrecondition((precondition));
+                                    } else {
+                                        throw new ChangeLogParseException(
+                                                "The '" + name + "' precondition type is not supported.");
+                                    }
+                                }
+                            }
+                        }else {
                             currentSql.append(line).append(System.lineSeparator());
                         }
                     }
@@ -319,7 +336,22 @@ public class FormattedSqlChangeLogParser implements ChangeLogParser {
         return changeLog;
     }
 
+    private void addValidateSqlCondition(ChangeSet changeSet) {
+        Precondition precondition = PreconditionFactory.getInstance().create("validate-sql");
+        if (precondition != null) {
+            getOrCreatePreconditions(changeSet).addNestedPrecondition((precondition));
+        }
+    }
 
+    private PreconditionContainer getOrCreatePreconditions(ChangeSet changeSet) {
+        PreconditionContainer preconditions = changeSet.getPreconditions();
+        if (preconditions == null) {
+            // create the defaults
+            preconditions = new PreconditionContainer();
+            changeSet.setPreconditions(preconditions);
+        }
+        return preconditions;
+    }
 
     private SqlPrecondition parseSqlCheckCondition(String body) throws ChangeLogParseException{
         Pattern[] patterns = new Pattern[] {
