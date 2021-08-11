@@ -22,6 +22,7 @@ public class GenerateChangelogCommandStep extends AbstractCliWrapperCommandStep 
     public static final CommandArgumentDefinition<String> DRIVER_ARG;
     public static final CommandArgumentDefinition<String> DRIVER_PROPERTIES_FILE_ARG;
     public static final CommandArgumentDefinition<String> OVERWRITE_OUTPUT_FILE_ARG;
+    public static final CommandArgumentDefinition<Boolean> INCLUDE_SCHEMA_ARG;
 
     static {
         CommandBuilder builder = new CommandBuilder(COMMAND_NAME);
@@ -51,6 +52,8 @@ public class GenerateChangelogCommandStep extends AbstractCliWrapperCommandStep 
                 .description("Types of objects to compare").build();
         OVERWRITE_OUTPUT_FILE_ARG = builder.argument("overwriteOutputFile", String.class)
                 .description("Flag to allow overwriting of output changelog file").build();
+        INCLUDE_SCHEMA_ARG = builder.argument("includeSchema", Boolean.class)
+                .description("Flag to use schema name for folder creation").build();
     }
 
 
